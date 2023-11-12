@@ -7,7 +7,36 @@ import time
 
 from vector2d import Vector2D
 
-class Globals: pass
+
+class GameState: 
+
+  def __init__(self):
+    self.all_entities = set()
+    self.to_remove = set()
+    self.to_add = set()
+
+  def Update(self):
+    for entity in self.all_entities:
+      entity.Update()
+    self.all_entities = (self.all_entities.union(self.to_add)).difference(self.to_remove)
+    self.to_remove = set()
+    self.to_add = set()
+
+  def Draw(self, stdscr):
+    for entity in self.all_entities:
+      entity.Draw(stdscr)
+
+
+  def AddEntity(self, entity):
+    assert(entity is not None)
+    self.to_add.add(entity)
+
+  def RemoveEntity(self, entity):
+    self.to_remove.add(entity)
+
+
+game_state = GameState()
+
 
 
 class GameObject(object):
@@ -18,6 +47,9 @@ class GameObject(object):
   def Update(self): pass
 
   def Draw(self, stdscr): pass
+
+  def Die(self):
+    game_state.RemoveEntity(self)
 
 class Player(GameObject):
 
@@ -32,7 +64,7 @@ class Player(GameObject):
     new_x = self.pos.x + self.move_dir
     
     # turn around at the edge
-    if new_x >= Globals.screen_size.x -1 or new_x == 0:
+    if new_x >= game_state.screen_size.x -1 or new_x == 0:
       new_x = self.pos.x
       self.move_dir = - self.move_dir
 
@@ -45,9 +77,9 @@ class Player(GameObject):
 
 class Bridge(GameObject):
   def __init__(self):
-    super(Bridge, self).__init__(Vector2D(Globals.screen_size.x, Globals.screen_size.y // 2 + 1))
+    super(Bridge, self).__init__(Vector2D(game_state.screen_size.x, game_state.screen_size.y // 2 + 1))
 
-    self.pieces = [ True for x in range(0, Globals.screen_size.x) ]
+    self.pieces = [ True for x in range(0, game_state.screen_size.x) ]
 
   def Draw(self, stdscr):
     for x, piece in zip(itertools.count(), self.pieces):
@@ -63,8 +95,8 @@ class SpaceShip(GameObject):
   MOVING = 1
   SHOOTING = 2
 
-  TIME_MOVING = 100
-  TIME_SHOOTING = 20
+  TIME_MOVING = 50
+  TIME_SHOOTING = 10
 
   def __init__(self, pos):
     super(SpaceShip, self).__init__(pos)
@@ -89,7 +121,7 @@ class SpaceShip(GameObject):
     new_x = self.pos.x + self.move_dir
     
     # turn around at the edge
-    if new_x == Globals.screen_size.x - self.width - 2 or new_x == 0:
+    if new_x == game_state.screen_size.x - self.width - 2 or new_x == 0:
       new_x = self.pos.x
       self.move_dir = - self.move_dir
 
@@ -109,21 +141,46 @@ class SpaceShip(GameObject):
     if self.time_in_shooting == 0:
       self.time_to_shoot = SpaceShip.TIME_MOVING
       self.state = SpaceShip.MOVING
-    # make a laser beam show up here
+      # make a laser beam show up here
+
+      game_state.AddEntity(LaserBeam(self.pos + Vector2D(self.width,1)))
 
 
   def Draw(self, stdscr):
     for dx, char in zip(itertools.count(), self.image):
        stdscr.addch(self.pos.y, self.pos.x + dx, char)
 
-    if (self.state == SpaceShip.SHOOTING 
-        and self.time_in_shooting < SpaceShip.TIME_SHOOTING / 2):
 
-      laser_x = self.pos.x + self.width//2+1
-      for y in range(self.pos.y+1, Globals.screen_size.y):
-        stdscr.addch(y, laser_x, 'X')
-      # the bridge loses a piece here
-      Globals.bridge.LosePiece(laser_x)
+
+class LaserBeam(GameObject):
+
+  def __init__(self, pos):
+    super(LaserBeam, self).__init__(pos)
+   
+
+  def Update(self):
+      self.Move()
+
+  def Move(self):
+    # Generate a random movement direction
+    # Calculate the new position
+    new_y = self.pos.y + 1
+
+    if (new_y == game_state.bridge.pos.y):
+      game_state.bridge.LosePiece(self.pos.x)
+      self.Die()
+
+    if (new_y == game_state.screen_size.y):
+      # time do die
+      self.Die()
+    
+    self.pos = Vector2D(self.pos.x, new_y)
+    
+  def Draw(self, stdscr):
+     stdscr.addch(self.pos.y, self.pos.x, '*')
+
+     # the bridge loses a piece here
+
 
 
 
@@ -137,24 +194,24 @@ def main(stdscr):
     sh, sw = stdscr.getmaxyx()
     screen_size= Vector2D(sw, sh)
 
-    Globals.screen_size = screen_size
+    game_state.screen_size = screen_size
     logging.info("Screen size is %d, %d", sw, sh)
 
     # player start pos
     y, x = sh // 2, sw // 2
 
-    Globals.player = Player(Vector2D(x,y), screen_size)
-    Globals.bridge = Bridge()
-    Globals.ship = SpaceShip(Vector2D(x, 10))
-
-    Globals.all_entities = [Globals.player, Globals.bridge, Globals.ship]
+    game_state.player = Player(Vector2D(x,y), screen_size)
+    game_state.bridge = Bridge()
+    game_state.ship = SpaceShip(Vector2D(x, 10))
+    
+    for ent in [game_state.player, game_state.bridge, game_state.ship]:
+      game_state.AddEntity(ent)
 
     while True:
         stdscr.clear()
 
-        for entity in Globals.all_entities:
-          entity.Update()
-          entity.Draw(stdscr)
+        game_state.Update()
+        game_state.Draw(stdscr)
 
 
         # Refresh the screen
@@ -166,7 +223,7 @@ def main(stdscr):
         if input_char == ord('q'):
             break
         elif input_char == ord('a'):
-          Globals.player.move_dir = - Globals.player.move_dir
+          game_state.player.move_dir = - game_state.player.move_dir
 
 
         # Sleep for a short time
