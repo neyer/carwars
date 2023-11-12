@@ -10,10 +10,19 @@ from vector2d import Vector2D
 
 class GameState: 
 
+
+  PLAYING = 1
+  FALLING = 2 # when one player hits the bottom, now everthing falls down
+  EXIT = -1
+
   def __init__(self):
     self.all_entities = set()
     self.to_remove = set()
     self.to_add = set()
+    self.stdscr = None # this will get set later
+    self.state = GameState.PLAYING
+    self.player_1_lives = 3
+    self.player_2_lives = 3
 
   def Update(self):
     for entity in self.all_entities:
@@ -22,9 +31,31 @@ class GameState:
     self.to_remove = set()
     self.to_add = set()
 
-  def Draw(self, stdscr):
+  def Draw(self):
+
+    # draw player life count
+    for x in range(self.player_1_lives):
+      self.stdscr.addch(0, x, self.player_1.icon)
+
+    for x in range(self.player_2_lives):
+      # need some offset on the right side
+      # 'screen size' does some weird things with the scroll bar
+      self.stdscr.addch(0, self.screen_size.x - 6 + x, self.player_2.icon)
+
     for entity in self.all_entities:
-      entity.Draw(stdscr)
+      entity.Draw(self.stdscr)
+
+  def HandleInput(self):
+    # Exit if 'q' is pressed
+     # check input
+     input_char = self.stdscr.getch()
+     if input_char == ord('q'):
+       self.state = GameState.EXIT
+     elif input_char == ord('a'):
+       self.player_1.move_dir = - game_state.player_1.move_dir
+     elif input_char == ord('l'):
+       self.player_2.move_dir = - game_state.player_2.move_dir
+
 
 
   def AddEntity(self, entity):
@@ -53,12 +84,34 @@ class GameObject(object):
 
 class Player(GameObject):
 
-  def __init__(self, pos, screen_max):
+  PLAYING = 0
+  FALLING = 1
+
+  def __init__(self, pos, icon):
     super(Player, self).__init__(pos)
-    self.screen_max = screen_max
     self.move_dir = 1
+    self.state = Player.PLAYING
+    self.icon = icon
 
   def Update(self):
+    if self.state == Player.PLAYING:
+      self.UpdatePlaying()
+    elif self.state == Player.FALLING:
+      self.UpdateFalling()
+
+  def UpdateFalling(self):
+    # keep falling down until you hit the bottom of the screen
+    self.pos = self.pos + Vector2D(0,1)
+
+    if (self.pos.y == game_state.screen_size.y):
+      self.pos.y = 0
+
+  def UpdatePlaying(self):
+    # check to see if the player is about to fall off the bridge
+    if (not game_state.bridge.HasPiece(self.pos.x)):
+      self.state = Player.FALLING
+      return
+
     # Generate a random movement direction
     # Calculate the new position
     new_x = self.pos.x + self.move_dir
@@ -71,8 +124,9 @@ class Player(GameObject):
     # Check if the new position is within the terminal boundaries
     self.pos = Vector2D(new_x, self.pos.y)
 
+
   def Draw(self, stdscr):
-     stdscr.addch(self.pos.y, self.pos.x, '🦍')
+     stdscr.addch(self.pos.y, self.pos.x, self.icon)
 
 
 class Bridge(GameObject):
@@ -89,6 +143,10 @@ class Bridge(GameObject):
 
   def LosePiece(self, x):
     self.pieces[x] = False
+
+  def HasPiece(self, x):
+    return self.pieces[x]
+
 
 class SpaceShip(GameObject):
 
@@ -190,6 +248,8 @@ def main(stdscr):
     stdscr.nodelay(1)   # Make getch() non-blocking
     stdscr.timeout(20) # Set a delay for getch() in milliseconds
 
+    game_state.stdscr = stdscr
+
     # Get the terminal size
     sh, sw = stdscr.getmaxyx()
     screen_size= Vector2D(sw, sh)
@@ -200,31 +260,24 @@ def main(stdscr):
     # player start pos
     y, x = sh // 2, sw // 2
 
-    game_state.player = Player(Vector2D(x,y), screen_size)
+    game_state.player_1 = Player(Vector2D(x//2,y),  '🦍')
+    game_state.player_2 = Player(Vector2D(x + x//2,y), '🦫')
     game_state.bridge = Bridge()
     game_state.ship = SpaceShip(Vector2D(x, 10))
     
-    for ent in [game_state.player, game_state.bridge, game_state.ship]:
+    for ent in [game_state.player_1, game_state.player_2, game_state.bridge, game_state.ship]:
       game_state.AddEntity(ent)
 
-    while True:
+    while game_state.state != GameState.EXIT:
         stdscr.clear()
 
         game_state.Update()
-        game_state.Draw(stdscr)
 
-
-        # Refresh the screen
+        # Refresh the screen and draw
+        game_state.Draw()
         stdscr.refresh()
 
-        # Exit if 'q' is pressed
-        # check input
-        input_char = stdscr.getch()
-        if input_char == ord('q'):
-            break
-        elif input_char == ord('a'):
-          game_state.player.move_dir = - game_state.player.move_dir
-
+        game_state.HandleInput()
 
         # Sleep for a short time
         #time.sleep(0.01)
