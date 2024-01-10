@@ -1,7 +1,9 @@
 import curses
+from dataclasses import dataclass
 import itertools
 import logging
 import math
+import pdb
 import random
 import time
 
@@ -9,7 +11,6 @@ from vector2d import Vector2D
 
 
 class GameState: 
-
 
   PLAYING = 1
   FALLING = 2 # when one player hits the bottom, now everthing falls down
@@ -23,25 +24,42 @@ class GameState:
     self.state = GameState.PLAYING
     self.player_1_lives = 3
     self.player_2_lives = 3
+    self.new_events = []
+    self.historical_events = [] # this only grows over time, for debugging
+    self.turn_counter = 0
+  
+  def HandleEvent(self, event):
+    """Some game state logic happens because of globally published messages"""
+
+
+    logging.info("Event: %s", event)
+    self.new_events.append(event)
+    self.historical_events.append(event)
+
+    if isinstance(event, PlayerFallingEvent):
+      self.state = GameState.FALLING
+    elif isinstance(event, PlayerFallingCompleteEvent):
+      self.state = GameState.PLAYING
+
 
   def Update(self):
+    # first update all the entities
     for entity in self.all_entities:
       entity.Update()
-    self.all_entities = (self.all_entities.union(self.to_add)).difference(self.to_remove)
+
+   # now handle all the new events
+    for event in self.new_events:
+      for entity in self.all_entities:
+        entity.HandleEvent(event)
+
+    # update entity sets and turn counters
+    self.all_entities = list(set(self.all_entities).union(self.to_add).difference(self.to_remove))
     self.to_remove = set()
     self.to_add = set()
+    self.new_events = []
+    self.turn_counter += 1 
 
   def Draw(self):
-
-    # draw player life count
-    for x in range(self.player_1_lives):
-      self.stdscr.addch(0, x, self.player_1.icon)
-
-    for x in range(self.player_2_lives):
-      # need some offset on the right side
-      # 'screen size' does some weird things with the scroll bar
-      self.stdscr.addch(0, self.screen_size.x - 6 + x, self.player_2.icon)
-
     for entity in self.all_entities:
       entity.Draw(self.stdscr)
 
@@ -55,6 +73,12 @@ class GameState:
        self.player_1.move_dir = - game_state.player_1.move_dir
      elif input_char == ord('l'):
        self.player_2.move_dir = - game_state.player_2.move_dir
+     elif input_char == ord('d'):
+       curses.curs_set(1)  # Hide the cursor
+       self.stdscr.clear()
+       self.stdscr.refresh()
+       pdb.set_trace()
+
 
 
 
@@ -77,6 +101,11 @@ class GameObject(object):
 
   def Update(self): pass
 
+  def HandleEvent(self, event): pass
+
+  def _BroadcastEvent(self, event):
+    game_state.HandleEvent(event)
+
   def Draw(self, stdscr): pass
 
   def Die(self):
@@ -92,6 +121,7 @@ class Player(GameObject):
     self.move_dir = 1
     self.state = Player.PLAYING
     self.icon = icon
+    self.lives = 3
 
   def Update(self):
     if self.state == Player.PLAYING:
@@ -110,6 +140,7 @@ class Player(GameObject):
     # check to see if the player is about to fall off the bridge
     if (not game_state.bridge.HasPiece(self.pos.x)):
       self.state = Player.FALLING
+      self._BroadcastEvent(PlayerFallingEvent(player=self))
       return
 
     # Generate a random movement direction
@@ -127,6 +158,31 @@ class Player(GameObject):
 
   def Draw(self, stdscr):
      stdscr.addch(self.pos.y, self.pos.x, self.icon)
+
+
+class PlayerLifeCounter(GameObject):
+
+  def __init__(self, player, x_position):
+    self.player = player
+    self.is_losing_life = False
+    self.x_position = x_position
+
+  def Draw(self, stdscr):
+    # draw player life count
+    num_to_draw = self.player.lives
+
+    # possibly add one if we are blinking now
+    if (self.is_losing_life):
+      if (game_state.turn_counter % 20 > 10):
+        num_to_draw -= 1
+
+    for x in range(num_to_draw):
+      stdscr.addch(0, self.x_position + x, self.player.icon)
+
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerFallingEvent) and event.player == self.player:
+      self.is_losing_life = True
 
 
 class Bridge(GameObject):
@@ -240,7 +296,20 @@ class LaserBeam(GameObject):
      # the bridge loses a piece here
 
 
+# messages
+@dataclass
+class PlayerFallingEvent:
+  player: Player
 
+  def __repr__(self):
+    return f"[Event: {self.player.icon} is falling]"
+
+@dataclass
+class PlayerFallingCompleteEvent:
+  player: Player
+
+  def __repr__(self):
+    return f"[Event: {self.player.icon} is done falling]"
 
 def main(stdscr):
     # Set up the terminal
@@ -265,7 +334,14 @@ def main(stdscr):
     game_state.bridge = Bridge()
     game_state.ship = SpaceShip(Vector2D(x, 10))
     
-    for ent in [game_state.player_1, game_state.player_2, game_state.bridge, game_state.ship]:
+    for ent in [
+        game_state.player_1, 
+        game_state.player_2, 
+        game_state.bridge, 
+        game_state.ship,
+        PlayerLifeCounter(game_state.player_1, 0),
+        PlayerLifeCounter(game_state.player_2, screen_size.x -6),
+        ]:
       game_state.AddEntity(ent)
 
     while game_state.state != GameState.EXIT:
