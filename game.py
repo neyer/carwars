@@ -9,11 +9,11 @@ import time
 
 from vector2d import Vector2D
 
-
 class GameState: 
 
   PLAYING = 1
   FALLING = 2 # when one player hits the bottom, now everthing falls down
+  WIN_SCREEN = 2 # when one has onhas one
   EXIT = -1
 
   def __init__(self):
@@ -30,7 +30,6 @@ class GameState:
   
   def HandleEvent(self, event):
     """Some game state logic happens because of globally published messages"""
-
 
     logging.info("Event: %s", event)
     self.new_events.append(event)
@@ -115,6 +114,7 @@ class Player(GameObject):
 
   PLAYING = 0
   FALLING = 1
+  EXPLODING = 1
 
   def __init__(self, pos, icon):
     super(Player, self).__init__(pos)
@@ -124,10 +124,13 @@ class Player(GameObject):
     self.lives = 3
 
   def Update(self):
-    if self.state == Player.PLAYING:
+    # if someone is falling, we stop moving
+    if self.state == Player.PLAYING and not game_state.state == GameState.FALLING:
       self.UpdatePlaying()
     elif self.state == Player.FALLING:
       self.UpdateFalling()
+    elif self.state == Player.EXPLODING:
+      self.UpdateExploding()
 
   def UpdateFalling(self):
     # keep falling down until you hit the bottom of the screen
@@ -135,6 +138,21 @@ class Player(GameObject):
 
     if (self.pos.y == game_state.screen_size.y):
       self.pos.y = 0
+
+    # we've wrapped around and hit the bridge 
+    # we are no longer falling
+    if (self.pos.y == game_state.bridge.pos.y-1):
+      self._BroadcastEvent(PlayerFallingCompleteEvent(player=self))
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerFallingCompleteEvent) and event.player == self:
+      self.state = Player.PLAYING
+      self.lives -= 1
+      if self.lives == 0:
+        self._BroadcastEvent(PlayerLosesEvent(player=self))
+
+    elif isinstance(event, PlayerLosesEvent) and event.player == self:
+      self.state = Player.EXPLODING
 
   def UpdatePlaying(self):
     # check to see if the player is about to fall off the bridge
@@ -154,6 +172,11 @@ class Player(GameObject):
 
     # Check if the new position is within the terminal boundaries
     self.pos = Vector2D(new_x, self.pos.y)
+
+
+  def UpdateExploding(self):
+    pass
+   
 
 
   def Draw(self, stdscr):
@@ -183,19 +206,49 @@ class PlayerLifeCounter(GameObject):
   def HandleEvent(self, event):
     if isinstance(event, PlayerFallingEvent) and event.player == self.player:
       self.is_losing_life = True
+    if isinstance(event, PlayerFallingCompleteEvent):
+      self.is_losing_life = False
+
+class GameNarratorDisplay(GameObject):
+
+  def __init__(self):
+    super(GameNarratorDisplay, self).__init__(Vector2D(game_state.screen_size.x//2, 4))
+
+    self.message = ''
+
+  def Draw(self, stdscr):
+    # draw player life count
+    start_x = self.pos.x - len(self.message)//2
+    for i, c in enumerate(self.message):
+      stdscr.addch(self.pos.y, start_x + i, c)
+
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerLosesEvent) :
+      winner = game_state.player_1 if event.player == game_state.player_2 else game_state.player_2
+      self.message = f'{event.player.icon} Has Died! {winner.icon} Wins!'
+
 
 
 class Bridge(GameObject):
   def __init__(self):
     super(Bridge, self).__init__(Vector2D(game_state.screen_size.x, game_state.screen_size.y // 2 + 1))
+    self.ResetAllPieces()
 
-    self.pieces = [ True for x in range(0, game_state.screen_size.x) ]
 
   def Draw(self, stdscr):
     for x, piece in zip(itertools.count(), self.pieces):
       this_char = '=' if piece else ' '
 
       stdscr.addch(self.pos.y, x, this_char)
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerFallingCompleteEvent):
+      self.ResetAllPieces()
+
+
+  def ResetAllPieces(self):
+    self.pieces = [ True for x in range(0, game_state.screen_size.x) ]
 
   def LosePiece(self, x):
     self.pieces[x] = False
@@ -311,6 +364,20 @@ class PlayerFallingCompleteEvent:
   def __repr__(self):
     return f"[Event: {self.player.icon} is done falling]"
 
+@dataclass
+class PlayerLosesEvent:
+  player: Player
+
+  def __repr__(self):
+    return f"[Event: {self.player.icon} has lost the game]"
+
+
+
+@dataclass
+class DebugRequest:
+  def __repr__(self):
+    return "[Event: DebugRequest]"
+
 def main(stdscr):
     # Set up the terminal
     curses.curs_set(0)  # Hide the cursor
@@ -341,6 +408,7 @@ def main(stdscr):
         game_state.ship,
         PlayerLifeCounter(game_state.player_1, 0),
         PlayerLifeCounter(game_state.player_2, screen_size.x -6),
+        GameNarratorDisplay()
         ]:
       game_state.AddEntity(ent)
 
