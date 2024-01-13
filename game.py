@@ -11,6 +11,7 @@ from vector2d import Vector2D
 
 class GameState: 
 
+  START_SCREEN = 0
   PLAYING = 1
   FALLING = 2 # when one player hits the bottom, now everthing falls down
   WIN_SCREEN = 2 # when one has onhas one
@@ -21,7 +22,7 @@ class GameState:
     self.to_remove = set()
     self.to_add = set()
     self.stdscr = None # this will get set later
-    self.state = GameState.PLAYING
+    self.state = GameState.START_SCREEN
     self.player_1_lives = 3
     self.player_2_lives = 3
     self.new_events = []
@@ -39,7 +40,30 @@ class GameState:
       self.state = GameState.FALLING
     elif isinstance(event, PlayerFallingCompleteEvent):
       self.state = GameState.PLAYING
+    elif isinstance(event, GameStartEvent):
+      self._HandleGameStartEvent()
 
+  def _HandleGameStartEvent(self):
+    # clear out all the enetities
+    self.all_entities = set()
+
+    x = self.screen_size.x //2
+    y = self.screen_size.y // 2
+    self.bridge = Bridge()
+    self.ship = SpaceShip(Vector2D(x, 10))
+    self.player_1 = Player(Vector2D(x // 2, y), '🦍')
+    self.player_2 = Player(Vector2D(x + x // 2, y), '🦫')
+
+    for ent in [
+      self.player_1,
+      self.player_2,
+      self.bridge,
+      self.ship,
+      PlayerLifeCounter(self.player_1, 0),
+      PlayerLifeCounter(self.player_2, self.screen_size.x - 6),
+      GameNarratorDisplay()
+    ]:
+     self.AddEntity(ent)
 
   def Update(self):
     # first update all the entities
@@ -72,6 +96,9 @@ class GameState:
        self.player_1.move_dir = - game_state.player_1.move_dir
      elif input_char == ord('l'):
        self.player_2.move_dir = - game_state.player_2.move_dir
+     elif input_char == ord(' '):
+       if (self.state == GameState.START_SCREEN):
+         self.HandleEvent(GameStartEvent())
      elif input_char == ord('d'):
        curses.curs_set(1)  # Hide the cursor
        self.stdscr.clear()
@@ -115,13 +142,19 @@ class Player(GameObject):
   PLAYING = 0
   FALLING = 1
   EXPLODING = 1
+  WINNING = 1
 
   def __init__(self, pos, icon):
     super(Player, self).__init__(pos)
     self.move_dir = 1
     self.state = Player.PLAYING
     self.icon = icon
-    self.lives = 3
+    self.lives = 1
+
+    # for jumping
+    self.bridge_height = game_state.bridge.pos.y-1
+    self.jump_height = self.bridge_height - 3
+    self.jump_dir = -1
 
   def Update(self):
     # if someone is falling, we stop moving
@@ -131,6 +164,22 @@ class Player(GameObject):
       self.UpdateFalling()
     elif self.state == Player.EXPLODING:
       self.UpdateExploding()
+    elif self.state == Player.WINNING:
+      self.UpdateWinning()
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerFallingCompleteEvent) and event.player == self:
+      self.state = Player.PLAYING
+      self.lives -= 1
+      if self.lives == 0:
+        self._BroadcastEvent(PlayerLosesEvent(player=self))
+
+    elif isinstance(event, PlayerLosesEvent):
+      if event.player == self:
+        self.state = Player.EXPLODING
+      else:
+        self.state = Player.WINNING
+
 
   def UpdateFalling(self):
     # keep falling down until you hit the bottom of the screen
@@ -143,16 +192,6 @@ class Player(GameObject):
     # we are no longer falling
     if (self.pos.y == game_state.bridge.pos.y-1):
       self._BroadcastEvent(PlayerFallingCompleteEvent(player=self))
-
-  def HandleEvent(self, event):
-    if isinstance(event, PlayerFallingCompleteEvent) and event.player == self:
-      self.state = Player.PLAYING
-      self.lives -= 1
-      if self.lives == 0:
-        self._BroadcastEvent(PlayerLosesEvent(player=self))
-
-    elif isinstance(event, PlayerLosesEvent) and event.player == self:
-      self.state = Player.EXPLODING
 
   def UpdatePlaying(self):
     # check to see if the player is about to fall off the bridge
@@ -176,7 +215,19 @@ class Player(GameObject):
 
   def UpdateExploding(self):
     pass
-   
+
+  def UpdateWinning(self):
+    # jump up and down here
+    logger.info(f'{self.icon} is winning!')
+    
+    if self.jump_dir == -1:
+      self.pos.y = self.pos.y - 1
+      if self.pos.y >= self.jump_height:
+        self.jump_dir = 1
+    else:
+      self.pos.y = self.pos.y + 1
+      if self.pos.y <= self.bridge_height:
+        self.jump_dir = -1
 
 
   def Draw(self, stdscr):
@@ -261,6 +312,7 @@ class SpaceShip(GameObject):
 
   MOVING = 1
   SHOOTING = 2
+  END_GAME = 3
 
   TIME_MOVING = 50
   TIME_SHOOTING = 10
@@ -281,6 +333,15 @@ class SpaceShip(GameObject):
       self.Move()
     elif self.state == SpaceShip.SHOOTING:
       self.Shoot()
+    elif self.state == SpaceShip.END_GAME:
+      self.time_to_shoot = 100
+      self.Move()
+
+  def HandleEvent(self, event):
+    if isinstance(event, PlayerFallingCompleteEvent) and event.player == self:
+      self.state = Player.PLAYING
+      self.lives -= 1
+   
 
   def Move(self):
     # Generate a random movement direction
@@ -311,7 +372,6 @@ class SpaceShip(GameObject):
       # make a laser beam show up here
 
       game_state.AddEntity(LaserBeam(self.pos + Vector2D(self.width,1)))
-
 
   def Draw(self, stdscr):
     for dx, char in zip(itertools.count(), self.image):
@@ -350,6 +410,13 @@ class LaserBeam(GameObject):
 
 
 # messages
+
+@dataclass
+class GameStartEvent:
+
+  def __repr__(self):
+    return '[Event: game begins!]'
+
 @dataclass
 class PlayerFallingEvent:
   player: Player
@@ -388,29 +455,13 @@ def main(stdscr):
 
     # Get the terminal size
     sh, sw = stdscr.getmaxyx()
-    screen_size= Vector2D(sw, sh)
-
+    screen_size = Vector2D(sw, sh)
     game_state.screen_size = screen_size
     logging.info("Screen size is %d, %d", sw, sh)
 
-    # player start pos
-    y, x = sh // 2, sw // 2
-
-    game_state.player_1 = Player(Vector2D(x//2,y),  '🦍')
-    game_state.player_2 = Player(Vector2D(x + x//2,y), '🦫')
-    game_state.bridge = Bridge()
-    game_state.ship = SpaceShip(Vector2D(x, 10))
-    
-    for ent in [
-        game_state.player_1, 
-        game_state.player_2, 
-        game_state.bridge, 
-        game_state.ship,
-        PlayerLifeCounter(game_state.player_1, 0),
-        PlayerLifeCounter(game_state.player_2, screen_size.x -6),
-        GameNarratorDisplay()
-        ]:
-      game_state.AddEntity(ent)
+    narrator = GameNarratorDisplay()
+    narrator.message = 'Press Space To Begin.'
+    game_state.AddEntity(narrator)
 
     while game_state.state != GameState.EXIT:
         stdscr.clear()
