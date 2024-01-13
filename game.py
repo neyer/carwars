@@ -14,7 +14,7 @@ class GameState:
   START_SCREEN = 0
   PLAYING = 1
   FALLING = 2 # when one player hits the bottom, now everthing falls down
-  WIN_SCREEN = 2 # when one has onhas one
+  WIN_SCREEN = 3 # when one player was won
   EXIT = -1
 
   def __init__(self):
@@ -50,7 +50,7 @@ class GameState:
     x = self.screen_size.x //2
     y = self.screen_size.y // 2
     self.bridge = Bridge()
-    self.ship = SpaceShip(Vector2D(x, 10))
+    self.ship = SpaceShip(Vector2D(x, 8))
     self.player_1 = Player(Vector2D(x // 2, y), '🦍')
     self.player_2 = Player(Vector2D(x + x // 2, y), '🦫')
 
@@ -97,7 +97,8 @@ class GameState:
      elif input_char == ord('l'):
        self.player_2.move_dir = - game_state.player_2.move_dir
      elif input_char == ord(' '):
-       if (self.state == GameState.START_SCREEN):
+       # for now just leave this on
+       if True or (self.state == GameState.START_SCREEN):
          self.HandleEvent(GameStartEvent())
      elif input_char == ord('d'):
        curses.curs_set(1)  # Hide the cursor
@@ -141,8 +142,8 @@ class Player(GameObject):
 
   PLAYING = 0
   FALLING = 1
-  EXPLODING = 1
-  WINNING = 1
+  EXPLODING = 2
+  WINNING = 3
 
   def __init__(self, pos, icon):
     super(Player, self).__init__(pos)
@@ -153,7 +154,7 @@ class Player(GameObject):
 
     # for jumping
     self.bridge_height = game_state.bridge.pos.y-1
-    self.jump_height = self.bridge_height - 3
+    self.jump_height = self.bridge_height - 4
     self.jump_dir = -1
 
   def Update(self):
@@ -173,6 +174,7 @@ class Player(GameObject):
       self.lives -= 1
       if self.lives == 0:
         self._BroadcastEvent(PlayerLosesEvent(player=self))
+        self.state = Player.EXPLODING
 
     elif isinstance(event, PlayerLosesEvent):
       if event.player == self:
@@ -218,15 +220,13 @@ class Player(GameObject):
 
   def UpdateWinning(self):
     # jump up and down here
-    logger.info(f'{self.icon} is winning!')
-    
     if self.jump_dir == -1:
       self.pos.y = self.pos.y - 1
-      if self.pos.y >= self.jump_height:
+      if self.pos.y <= self.jump_height:
         self.jump_dir = 1
     else:
       self.pos.y = self.pos.y + 1
-      if self.pos.y <= self.bridge_height:
+      if self.pos.y >= self.bridge_height:
         self.jump_dir = -1
 
 
@@ -338,9 +338,10 @@ class SpaceShip(GameObject):
       self.Move()
 
   def HandleEvent(self, event):
-    if isinstance(event, PlayerFallingCompleteEvent) and event.player == self:
-      self.state = Player.PLAYING
-      self.lives -= 1
+    if isinstance(event, GameStartEvent):
+      self.state = SpaceShip.MOVING
+    elif isinstance(event, PlayerLosesEvent):
+      self.state = SpaceShip.END_GAME
    
 
   def Move(self):
