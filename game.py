@@ -60,7 +60,9 @@ class GameState:
       self.bridge,
       self.ship,
       PlayerLifeCounter(self.player_1, 0),
+      PlayerPowerLevelCounter(self.player_1, 0),
       PlayerLifeCounter(self.player_2, self.screen_size.x - 6),
+      PlayerPowerLevelCounter(self.player_2, 0),
       GameNarratorDisplay()
     ]:
      self.AddEntity(ent)
@@ -107,6 +109,10 @@ class GameState:
        pdb.set_trace()
 
 
+  def OtherPlayer(self, player):
+    if player == self.player_2:
+      return self.player_1
+    return self.player_2
 
 
   def AddEntity(self, entity):
@@ -150,7 +156,8 @@ class Player(GameObject):
     self.move_dir = 1
     self.state = Player.PLAYING
     self.icon = icon
-    self.lives = 1
+    self.lives = 3
+    self.power_level = 0
 
     # for jumping
     self.bridge_height = game_state.bridge.pos.y-1
@@ -182,6 +189,17 @@ class Player(GameObject):
       else:
         self.state = Player.WINNING
 
+    elif isinstance(event, PlayersBounceEvent):
+      # go away from the other player
+      other = game_state.OtherPlayer(self)
+      to_other = other.pos - self.pos
+      if (to_other.x > 0):
+        self.move_dir = -1
+      else:
+        self.move_dir = 1
+
+    elif isinstance(event, PlayerHitByBeamEvent):
+      self.power_level += 1
 
   def UpdateFalling(self):
     # keep falling down until you hit the bottom of the screen
@@ -206,13 +224,22 @@ class Player(GameObject):
     # Calculate the new position
     new_x = self.pos.x + self.move_dir
     
-    # turn around at the edge
+    # turn around at the edge of the screen
     if new_x >= game_state.screen_size.x -1 or new_x == 0:
       new_x = self.pos.x
       self.move_dir = - self.move_dir
 
-    # Check if the new position is within the terminal boundaries
-    self.pos = Vector2D(new_x, self.pos.y)
+
+
+    # see if you've collided with the other player
+    # if so, emit a players bounce event
+    other = game_state.OtherPlayer(self)
+    if (other.pos.x == new_x):
+      # now you both turn around
+      self._BroadcastEvent(PlayersBounceEvent())
+    else:
+      self.pos = Vector2D(new_x, self.pos.y)
+
 
 
   def UpdateExploding(self):
@@ -260,6 +287,18 @@ class PlayerLifeCounter(GameObject):
     if isinstance(event, PlayerFallingCompleteEvent):
       self.is_losing_life = False
 
+class PlayerPowerLevelCounter(GameObject):
+  def __init__(self, player, x_position):
+    self.player = player
+    self.is_losing_life = False
+    self.x_position = x_position
+
+  def Draw(self, stdscr):
+    # draw player life count
+    num_to_draw = self.player.power_level
+    for x in range(num_to_draw):
+      stdscr.addch(1, self.x_position + x, '🌟')
+
 class GameNarratorDisplay(GameObject):
 
   def __init__(self):
@@ -275,8 +314,8 @@ class GameNarratorDisplay(GameObject):
 
 
   def HandleEvent(self, event):
-    if isinstance(event, PlayerLosesEvent) :
-      winner = game_state.player_1 if event.player == game_state.player_2 else game_state.player_2
+    if isinstance(event, PlayerLosesEvent):
+      winner = game_state.OtherPlayer(event.player)
       self.message = f'{event.player.icon} Has Died! {winner.icon} Wins!'
 
 
@@ -314,18 +353,23 @@ class SpaceShip(GameObject):
   SHOOTING = 2
   END_GAME = 3
 
-  TIME_MOVING = 50
+  TIME_MOVING_MIN = 20
+  TIME_MOVING_MAX = 80
   TIME_SHOOTING = 10
 
   def __init__(self, pos):
     super(SpaceShip, self).__init__(pos)
     self.pos = pos
-    self.move_dir = 1
-    self.image = '<OOO>'
-    self.width = len(self.image)//2
-    self.time_to_shoot = SpaceShip.TIME_MOVING
+    self.move_dir =  random.choice([-1,1])
+    self.image_normal = '<OOO>'
+    self.image_almost = '<111>'
+    # really this is half-width
+    self.width = len(self.image_normal)//2
+    self.time_until_shot = self.PickTimeMoving()
+    self.shoot_warning_frames = 10
     self.time_in_shooting = SpaceShip.TIME_SHOOTING
     self.state = SpaceShip.MOVING
+    self.is_shooting = False
 
   def Update(self):
 
@@ -334,7 +378,7 @@ class SpaceShip(GameObject):
     elif self.state == SpaceShip.SHOOTING:
       self.Shoot()
     elif self.state == SpaceShip.END_GAME:
-      self.time_to_shoot = 100
+      self.time_until_shot = 100
       self.Move()
 
   def HandleEvent(self, event):
@@ -342,11 +386,16 @@ class SpaceShip(GameObject):
       self.state = SpaceShip.MOVING
     elif isinstance(event, PlayerLosesEvent):
       self.state = SpaceShip.END_GAME
-   
+
+
+  def PickTimeMoving(self):
+    return int(random.random()*(SpaceShip.TIME_MOVING_MAX - SpaceShip.TIME_MOVING_MIN)) + SpaceShip.TIME_MOVING_MIN
+
 
   def Move(self):
     # Generate a random movement direction
     # Calculate the new position
+    self.is_shooting = False
     new_x = self.pos.x + self.move_dir
     
     # turn around at the edge
@@ -358,9 +407,9 @@ class SpaceShip(GameObject):
     self.pos = Vector2D(new_x, self.pos.y)
 
     # update time to shoot
-    self.time_to_shoot -= 1
+    self.time_until_shot -= 1
 
-    if self.time_to_shoot == 0:
+    if self.time_until_shot == 0:
       self.state = SpaceShip.SHOOTING
       self.time_in_shooting = SpaceShip.TIME_SHOOTING
 
@@ -368,16 +417,34 @@ class SpaceShip(GameObject):
   def Shoot(self):
     self.time_in_shooting -= 1
     if self.time_in_shooting == 0:
-      self.time_to_shoot = SpaceShip.TIME_MOVING
+      self.is_shooting = True
+      beam_x = self.pos.x + self.width
+      game_state.bridge.LosePiece(beam_x)
+      # go back to moving
+      self.time_until_shot = self.PickTimeMoving()
       self.state = SpaceShip.MOVING
-      # make a laser beam show up here
+      # check for the bridge having a hole if
 
-      game_state.AddEntity(LaserBeam(self.pos + Vector2D(self.width,1)))
+
+  def GetCurrentImage(self):
+    if  self.time_until_shot < self.shoot_warning_frames:
+      if game_state.turn_counter % 2 == 0:
+        return self.image_almost
+    return self.image_normal
 
   def Draw(self, stdscr):
-    for dx, char in zip(itertools.count(), self.image):
+    image = self.GetCurrentImage()
+    for dx, char in zip(itertools.count(), image):
        stdscr.addch(self.pos.y, self.pos.x + dx, char)
+    if self.is_shooting:
+       beam_x = self.pos.x + self.width
+       y_distance = game_state.bridge.pos.y - self.pos.y
+       for dy in range(0, y_distance):
+         stdscr.addch(self.pos.y + dy, beam_x, '✨')
 
+
+
+# game_state.AddEntity(LaserBeam(self.pos + Vector2D(self.width,1)))
 
 
 class LaserBeam(GameObject):
@@ -433,13 +500,23 @@ class PlayerFallingCompleteEvent:
     return f"[Event: {self.player.icon} is done falling]"
 
 @dataclass
+class PlayersBounceEvent:
+  def __repr__(self):
+    return f"[Event: players bounced off each other]"
+
+@dataclass
 class PlayerLosesEvent:
   player: Player
 
   def __repr__(self):
     return f"[Event: {self.player.icon} has lost the game]"
 
+@dataclass
+class PlayerHitByBeamEvent:
+  player: Player
 
+  def __repr__(self):
+    return f"[Event: {self.player.icon} hit by the beam]"
 
 @dataclass
 class DebugRequest:
@@ -476,7 +553,7 @@ def main(stdscr):
         game_state.HandleInput()
 
         # Sleep for a short time
-        #time.sleep(0.01)
+        time.sleep(0.01)
 
 if __name__ == "__main__":
     logging.basicConfig(filename='game.log', level=logging.DEBUG)
