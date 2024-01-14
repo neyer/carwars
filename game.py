@@ -61,8 +61,8 @@ class GameState:
       self.ship,
       PlayerLifeCounter(self.player_1, 0),
       PlayerPowerLevelCounter(self.player_1, 0),
-      PlayerLifeCounter(self.player_2, self.screen_size.x - 6),
-      PlayerPowerLevelCounter(self.player_2, 0),
+      PlayerLifeCounter(self.player_2, self.screen_size.x - 6), # the emojis take up more space than a nromal character
+      PlayerPowerLevelCounter(self.player_2, self.screen_size.x - 6),
       GameNarratorDisplay()
     ]:
      self.AddEntity(ent)
@@ -527,7 +527,7 @@ def main(stdscr):
         game_state.HandleInput()
 
         # Sleep for a short time
-        time.sleep(0.01)
+        time.sleep(0.03)
 
 if __name__ == "__main__":
     logging.basicConfig(filename='game.log', level=logging.DEBUG)
