@@ -92,11 +92,11 @@ class GameState:
     # Exit if 'q' is pressed
      # check input
      input_char = self.stdscr.getch()
-     if input_char == ord('q'):
+     if input_char == ord('q') :
        self.state = GameState.EXIT
-     elif input_char == ord('a'):
+     elif input_char == ord('a') and self.state == GameState.PLAYING:
        self.player_1.move_dir = - game_state.player_1.move_dir
-     elif input_char == ord('l'):
+     elif input_char == ord('l') and self.state == GameState.PLAYING:
        self.player_2.move_dir = - game_state.player_2.move_dir
      elif input_char == ord(' '):
        # for now just leave this on
