@@ -198,7 +198,7 @@ class Player(GameObject):
       else:
         self.move_dir = 1
 
-    elif isinstance(event, PlayerHitByBeamEvent):
+    elif isinstance(event, PlayerHitByBeamEvent) and event.player == self:
       self.power_level += 1
 
   def UpdateFalling(self):
@@ -396,19 +396,19 @@ class SpaceShip(GameObject):
     # Generate a random movement direction
     # Calculate the new position
     self.is_shooting = False
-    new_x = self.pos.x + self.move_dir
-    
-    # turn around at the edge
-    if new_x == game_state.screen_size.x - self.width - 2 or new_x == 0:
-      new_x = self.pos.x
-      self.move_dir = - self.move_dir
+    if (self.time_until_shot > self.shoot_warning_frames):
+      new_x = self.pos.x + self.move_dir
 
-    # Check if the new position is within the terminal boundaries
-    self.pos = Vector2D(new_x, self.pos.y)
+      # turn around at the edge
+      if new_x == game_state.screen_size.x - self.width - 2 or new_x == 0:
+        new_x = self.pos.x
+        self.move_dir = - self.move_dir
+
+      # Check if the new position is within the terminal boundaries
+      self.pos = Vector2D(new_x, self.pos.y)
 
     # update time to shoot
     self.time_until_shot -= 1
-
     if self.time_until_shot == 0:
       self.state = SpaceShip.SHOOTING
       self.time_in_shooting = SpaceShip.TIME_SHOOTING
@@ -418,13 +418,20 @@ class SpaceShip(GameObject):
     self.time_in_shooting -= 1
     if self.time_in_shooting == 0:
       self.is_shooting = True
-      beam_x = self.pos.x + self.width
-      game_state.bridge.LosePiece(beam_x)
+      self.DoLaserShot()
       # go back to moving
       self.time_until_shot = self.PickTimeMoving()
       self.state = SpaceShip.MOVING
       # check for the bridge having a hole if
 
+  def DoLaserShot(self):
+    beam_x = self.pos.x + self.width
+    if game_state.player_1.pos.x == beam_x:
+      self._BroadcastEvent(PlayerHitByBeamEvent(game_state.player_1))
+    elif game_state.player_2.pos.x == beam_x:
+      self._BroadcastEvent(PlayerHitByBeamEvent(game_state.player_2))
+    else:
+      game_state.bridge.LosePiece(beam_x)
 
   def GetCurrentImage(self):
     if  self.time_until_shot < self.shoot_warning_frames:
@@ -442,39 +449,6 @@ class SpaceShip(GameObject):
        for dy in range(0, y_distance):
          stdscr.addch(self.pos.y + dy, beam_x, '✨')
 
-
-
-# game_state.AddEntity(LaserBeam(self.pos + Vector2D(self.width,1)))
-
-
-class LaserBeam(GameObject):
-
-  def __init__(self, pos):
-    super(LaserBeam, self).__init__(pos)
-   
-
-  def Update(self):
-      self.Move()
-
-  def Move(self):
-    # Generate a random movement direction
-    # Calculate the new position
-    new_y = self.pos.y + 1
-
-    if (new_y == game_state.bridge.pos.y):
-      game_state.bridge.LosePiece(self.pos.x)
-      self.Die()
-
-    if (new_y == game_state.screen_size.y):
-      # time do die
-      self.Die()
-    
-    self.pos = Vector2D(self.pos.x, new_y)
-    
-  def Draw(self, stdscr):
-     stdscr.addch(self.pos.y, self.pos.x, '*')
-
-     # the bridge loses a piece here
 
 
 # messages
